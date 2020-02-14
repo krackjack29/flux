@@ -155,6 +155,20 @@ To work around exceptional cases, you can mount a docker config into
 the Flux container. See the argument `--docker-config` in [the daemon
 arguments reference](references/daemon.md).
 
+For ECR, Flux requires access to the EC2 instance metadata API to
+obtain AWS credentials. Kube2iam, Kiam, and potentially other
+Kuberenetes IAM utilities may block pod level access to the EC2
+metadata APIs. If this is the case, Flux will be unable to poll ECR
+for automated workloads.
+
+ -  If you are using Kiam, you need to whitelist the following API routes:
+      ```
+      --whitelist-route-regexp=(/latest/meta-data/placement/availability-zone|/latest/dynamic/instance-identity/document)
+      ```
+ - If you are using kube2iam, ensure the values of --iptables and
+    --in-interface are [configured correctly for your virtual network
+    provider](https://github.com/jtblin/kube2iam#iptables).
+
 See also
 [Why are my images not showing up in the list of images?](#why-are-my-images-not-showing-up-in-the-list-of-images)
 
@@ -317,8 +331,6 @@ the change to git:
 ```
 
 To stop ignoring these annotated resources, you simply remove the annotation from the manifests in git.
-A live example can be seen
-[here](https://github.com/stefanprodan/openfaas-flux/blob/master/secrets/openfaas-token.yaml).
 
 Flux will ignore any resource that has the annotation _either_ in git, or in the cluster itself;
 sometimes it may be easier to annotate a *running resource in the cluster* as opposed to committing
@@ -336,30 +348,31 @@ If the replicas field is not present in Git, Flux will not override the replica 
 
 ### Can I disable Flux registry scanning?
 
-You can exclude images from being scanned by providing a list of glob expressions using the `registry-exclude-image` flag.
+You can completely disable registry scanning by using the
+`--registry-disable-scanning` flag. This allows deploying Flux without
+ Memcached.
 
-Exclude images from Docker Hub and Quay.io:
+
+If you only want to disable scanning for certain images, don't set
+`--registry-disable-scanning`. Instead, you can tell Flux what images to exclude
+by supplying a list of glob expressions to the `--registry-exclude-image` flag.
+
+To exclude images from Docker Hub and Quay.io, use:
 
 ```
 --registry-exclude-image=docker.io/*,quay.io/*
 ```
 
-And the Helm install equivalent (note the `\,` separator):
+Here is the Helm install equivalent (note the `\,` separator):
 
 ```
 --set registry.excludeImage="docker.io/*\,quay.io/*"
 ```
 
-Exclude images containing `test` in the FQN:
+To exclude images containing `test` in the FQN, use:
 
 ```
 --registry-exclude-image=*test*
-```
-
-Disable image scanning for all images:
-
-```
---registry-exclude-image=*
 ```
 
 ### Does Flux support Kustomize/Templating/My favorite manifest factorization technology?

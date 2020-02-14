@@ -79,6 +79,7 @@ Version controlling of cluster manifests provides reproducibility and a historic
 | --registry-ecr-include-id                        | `[]`                               | include these AWS account ID(s) when scanning images in ECR (multiple values allowed); empty means allow all, unless excluded
 | --registry-ecr-exclude-id                        | `[<EKS SYSTEM ACCOUNT>]`           | exclude these AWS account ID(s) when scanning ECR (multiple values allowed); defaults to the EKS system account, so system images will not be scanned
 | --registry-require                               | `[]`                               | exit with an error if the given services are not available. Useful for escalating misconfiguration or outages that might otherwise go undetected. Presently supported values: {`ecr`} |
+| --registry-disable-scanning                      | `false`                            | do not scan container image registries to fill in the registry cache
 | **k8s-secret backed ssh keyring configuration**
 | --k8s-secret-name                                | `flux-git-deploy`                  | name of the k8s secret used to store the private SSH key
 | --k8s-secret-volume-mount-path                   | `/etc/fluxd/ssh`                   | mount location of the k8s secret storing the private SSH key
@@ -86,6 +87,7 @@ Version controlling of cluster manifests provides reproducibility and a historic
 | **k8s configuration**
 | --k8s-allow-namespace                            |                                    | restrict all operations to the provided namespaces
 | --k8s-default-namespace                          |                                    | the namespace to use for resources where a namespace is not specified
+| --k8s-unsafe-exclude-resource                    | `["*metrics.k8s.io/*", "webhook.certmanager.k8s.io/*", "v1/Event"]` | do not attempt to obtain cluster resources whose group/version/kind matches these glob expressions, e.g. `coordination.k8s.io/v1beta1/Lease`, `coordination.k8s.io/*/Lease` or `coordination.k8s.io/*`. Potentially unsafe, please read Flux's troubleshooting section on `--k8s-unsafe-exclude-resource` before using it.
 | **upstream service**
 | --connect                                        |                                    | connect to an upstream service e.g., Weave Cloud, at this base address
 | --token                                          |                                    | authentication token for upstream service
@@ -94,7 +96,7 @@ Version controlling of cluster manifests provides reproducibility and a historic
 | --ssh-keygen-type                                |                                    | -t argument to ssh-keygen (default unspecified)
 | **manifest generation**
 | --manifest-generation                            | false                              | search for .flux.yaml files to generate manifests
-| --sops                                           | false                              | decrypt sops encrypted manifest files with sops before applying them. Be aware that manifests generated with .flux.yaml are not decrypted. This is due to the way sops handles yaml streams. It is recommended that generating manifests from encrypted files is handles with the included sops binary. Provide keys for sops in the same way as providing them for the binary, for example with --git-gpg-key-import. A full description of how to supply sops with a key can be found in the [sops documentation](https://github.com/mozilla/sops#usage)
+| --sops                                           | false                              | decrypt SOPS-encrypted manifest files before applying them to the cluster. Provide decryption keys in the same way as providing them for `sops` the binary, for example with `--git-gpg-key-import`. The full description of how to supply sops with a key can be found in the [SOPS documentation](https://github.com/mozilla/sops#usage). Be aware that manifests generated with `.flux.yaml` files are not decrypted. Instead, make sure to output cleartext manifests by explicitly invoking the `sops` binary.
 
 ## More information
 

@@ -622,7 +622,14 @@ func (d *Daemon) GitRepoConfig(ctx context.Context, regenerate bool) (v6.GitConf
 	}
 
 	origin := d.Repo.Origin()
-	status, _ := d.Repo.Status()
+	// Sanitize the URL before sharing it
+	origin.URL = origin.SafeURL()
+	status, err := d.Repo.Status()
+	gitConfigError := ""
+	if err != nil {
+		gitConfigError = err.Error()
+	}
+
 	path := ""
 	if len(d.GitConfig.Paths) > 0 {
 		path = strings.Join(d.GitConfig.Paths, ",")
@@ -635,6 +642,7 @@ func (d *Daemon) GitRepoConfig(ctx context.Context, regenerate bool) (v6.GitConf
 		},
 		PublicSSHKey: publicSSHKey,
 		Status:       status,
+		Error:        gitConfigError,
 	}, nil
 }
 
@@ -650,7 +658,11 @@ func (d *Daemon) WithWorkingClone(ctx context.Context, fn func(*git.Checkout) er
 	if err != nil {
 		return err
 	}
-	defer co.Clean()
+	defer func() {
+		if err := co.Clean(); err != nil {
+			d.Logger.Log("error", fmt.Sprintf("cannot clean working clone: %s", err))
+		}
+	}()
 	if d.GitSecretEnabled {
 		if err := co.SecretUnseal(ctx); err != nil {
 			return err
@@ -671,7 +683,11 @@ func (d *Daemon) WithReadonlyClone(ctx context.Context, fn func(*git.Export) err
 	if err != nil {
 		return err
 	}
-	defer co.Clean()
+	defer func() {
+		if err := co.Clean(); err != nil {
+			d.Logger.Log("error", fmt.Sprintf("cannot read-only clone: %s", err))
+		}
+	}()
 	if d.GitSecretEnabled {
 		if err := co.SecretUnseal(ctx); err != nil {
 			return err

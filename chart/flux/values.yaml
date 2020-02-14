@@ -9,7 +9,7 @@ logFormat: fmt
 
 image:
   repository: docker.io/fluxcd/flux
-  tag: 1.16.0
+  tag: 1.18.0
   pullPolicy: IfNotPresent
   pullSecret:
 
@@ -17,76 +17,8 @@ service:
   type: ClusterIP
   port: 3030
 
-helmOperator:
-  replicaCount: 1
-  create: false
-  createCRD: false
-  repository: docker.io/fluxcd/helm-operator
-  tag: 0.10.1
-  pullPolicy: IfNotPresent
-  pullSecret:
-  # Limit the operator scope to a single namespace
-  allowNamespace:
-  # Update dependencies for charts
-  updateChartDeps: true
-  # Log the diff when a chart release diverges
-  logReleaseDiffs: false
-  # Interval at which to check for changed charts
-  chartsSyncInterval: "3m"
-  # (Experimental) amount of workers processing releases
-  workers:
-
-  # Tiller settings
-
-  # If a hostname or IP is given here, that will be combined with the
-  # tillerPort and used for connecting to Tiller. Otherwise, the
-  # cluster-ip of the `tiller-deploy` service in .tillerNamespace is
-  # looked up.
-  tillerHost:
-  tillerPort: 44134
-  tillerNamespace: kube-system
-  tls:
-    secretName: "helm-client-certs"
-    verify: false
-    enable: false
-    keyFile: "tls.key"
-    certFile: "tls.crt"
-    caContent: ""
-    hostname: ""
-  # Mount repositories.yaml configuration in a volume
-  configureRepositories:
-    enable: false
-    volumeName: repositories-yaml
-    secretName: flux-helm-repositories
-    cacheVolumeName: repositories-cache
-    repositories:
-      # - name: bitnami
-      #   url: https://charts.bitnami.com
-      #   username:
-      #   password:
-  # Override Flux git settings
-  git:
-    pollInterval: ""
-    timeout: ""
-    # generate a SSH key named identity: ssh-keygen -q -N "" -f ./identity
-    # create a Kubernetes secret: kubectl -n flux create secret generic helm-ssh --from-file=./identity
-    # delete the private key: rm ./identity
-    # add ./identity.pub as a read-only deployment key in your Git repo where the charts are
-    # set the secret name (helm-ssh) below
-    secretName: ""
-  # Additional environment variables to set
-  extraEnvs: []
-  # extraEnvs:
-  #   - name: FOO
-  #     value: bar
-  nodeSelector: {}
-  annotations: {}
-  tolerations: []
-  affinity: {}
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
+# Specifies which namespaces flux should have access to
+allowedNamespaces: []
 
 rbac:
   # Specifies whether RBAC resources should be created
@@ -103,10 +35,9 @@ serviceAccount:
   # Annotations for the Service Account
   annotations: {}
 
-# If create is `false` and no name is given, Flux and the Helm
-# Operator will be restricted to the namespace where they are
-# deployed, and the kubeconfig default context will be set to that
-# namespace.
+# If create is `false` and no name is given, Flux will be restricted to
+# namespaces listed in allowedNamespaces and the namespace where it is
+# deployed, and the kubeconfig default context will be set to that namespace.
 clusterRole:
   create: true
   # The name of a cluster role to bind to; if not set and create is
@@ -121,6 +52,8 @@ resources:
 nodeSelector: {}
 
 annotations: {}
+
+podLabels: {}
 
 tolerations: []
 
@@ -151,6 +84,10 @@ sync:
   state: git
   # Duration after which sync operations time out (defaults to 1m)
   timeout:
+  # Controls how often Flux will apply what’s in git, to the cluster, absent new commits.
+  # Reducing this interval below a minute or so may hinder Flux, since syncs can take tens of seconds,
+  # leaving not much time to do other operations.
+  #  interval: "5m"
 
 git:
   # URL of git repo with Kubernetes manifests; e.g. git.url=ssh://git@github.com/fluxcd/flux-get-started
@@ -197,6 +134,10 @@ git:
     #   [credential "https://github.com"]
     #           username = foo
 
+# If `true` SOPS support will be enabled
+sops:
+  enabled: false
+
 registry:
   # Period at which to check for updated images
   automationInterval: "5m"
@@ -210,6 +151,8 @@ registry:
   insecureHosts:
   # Duration to keep cached image info. Must be < 1 month. (Deprecated)
   cacheExpiry:
+  # Disable registry scanning completely
+  disableScanning: false
   # Do not scan images that match these glob expressions
   excludeImage:
   # Allow usage of (RFC3339) timestamp labels from (canonical) image refs that match these glob expressions
@@ -240,6 +183,7 @@ memcached:
   verbose: false
   maxItemSize: 5m
   maxMemory: 512
+  addSecurityContext: true
   securityContext:
     runAsUser: 11211
     runAsGroup: 11211
@@ -322,3 +266,14 @@ initContainers: {}
 
 # Additional containers to be added to the flux pod.
 extraContainers: []
+
+# Host aliases to be added to the Flux pod - see < - ip: <https://kubernetes.io/docs/concepts/services-networking/add-entries-to-pod-etc-hosts-with-host-aliases/>
+hostAliases: {}
+# - ip: "127.0.0.1"
+#    hostnames:
+#    - "foo.local"
+#    - "bar.local"
+#  - ip: "10.1.2.3"
+#    hostnames:
+#    - "foo.remote"
+#    - "bar.remote"

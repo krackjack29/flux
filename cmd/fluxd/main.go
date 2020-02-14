@@ -30,6 +30,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 
+	helmopclient "github.com/fluxcd/helm-operator/pkg/client/clientset/versioned"
+
 	hrclient "github.com/fluxcd/flux/integrations/client/clientset/versioned"
 	"github.com/fluxcd/flux/pkg/checkpoint"
 	"github.com/fluxcd/flux/pkg/cluster"
@@ -50,7 +52,6 @@ import (
 	"github.com/fluxcd/flux/pkg/remote"
 	"github.com/fluxcd/flux/pkg/ssh"
 	fluxsync "github.com/fluxcd/flux/pkg/sync"
-	helmopclient "github.com/fluxcd/helm-operator/pkg/client/clientset/versioned"
 )
 
 var version = "unversioned"
@@ -71,6 +72,8 @@ const (
 	defaultGitSkipMessage = "\n\n[ci skip]"
 
 	RequireECR = "ecr"
+
+	k8sInClusterSecretsBaseDir = "/var/run/secrets/kubernetes.io"
 )
 
 var (
@@ -120,7 +123,7 @@ func main() {
 		gitSetAuthor = fs.Bool("git-set-author", false, "if set, the author of git commits will reflect the user who initiated the commit and will differ from the git committer.")
 		gitLabel     = fs.String("git-label", "", "label to keep track of sync progress; overrides both --git-sync-tag and --git-notes-ref")
 		gitSecret    = fs.Bool("git-secret", false, `if set, git-secret will be run on every git checkout. A gpg key must be imported using  --git-gpg-key-import or by mounting a keyring containing it directly`)
-		sopsEnabled  = fs.Bool("sops", false, `if set, decrypt sops-encrypted manifest files with sops before applying them. Be aware that manifests generated with .flux.yaml are not automatically decrypted. Provide decryption keys in the same way you would provide them for the sops binary`)
+		sopsEnabled  = fs.Bool("sops", false, `if set, decrypt SOPS-encrypted manifest files with before syncing them. Provide decryption keys in the same way you would provide them for the sops binary. Be aware that manifests generated with .flux.yaml are not automatically decrypted`)
 		// Old git config; still used if --git-label is not supplied, but --git-label is preferred.
 		gitSyncTag     = fs.String("git-sync-tag", defaultGitSyncTag, fmt.Sprintf("tag to use to mark sync progress for this cluster (only relevant when --sync-state=%s)", fluxsync.GitTagStateMode))
 		gitNotesRef    = fs.String("git-notes-ref", defaultGitNotesRef, "ref to use for keeping commit annotations in git notes")
@@ -148,14 +151,15 @@ func main() {
 		memcachedTimeout  = fs.Duration("memcached-timeout", time.Second, "maximum time to wait before giving up on memcached requests.")
 		memcachedService  = fs.String("memcached-service", "memcached", "SRV service used to discover memcache servers.")
 
-		automationInterval   = fs.Duration("automation-interval", 5*time.Minute, "period at which to check for image updates for automated workloads")
-		registryPollInterval = fs.Duration("registry-poll-interval", 5*time.Minute, "period at which to check for updated images")
-		registryRPS          = fs.Float64("registry-rps", 50, "maximum registry requests per second per host")
-		registryBurst        = fs.Int("registry-burst", defaultRemoteConnections, "maximum number of warmer connections to remote and memcache")
-		registryTrace        = fs.Bool("registry-trace", false, "output trace of image registry requests to log")
-		registryInsecure     = fs.StringSlice("registry-insecure-host", []string{}, "let these registry hosts skip TLS host verification and fall back to using HTTP instead of HTTPS; this allows man-in-the-middle attacks, so use with extreme caution")
-		registryExcludeImage = fs.StringSlice("registry-exclude-image", []string{"k8s.gcr.io/*"}, "do not scan images that match these glob expressions; the default is to exclude the 'k8s.gcr.io/*' images")
-		registryUseLabels    = fs.StringSlice("registry-use-labels", []string{"index.docker.io/weaveworks/*", "index.docker.io/fluxcd/*"}, "use the timestamp (RFC3339) from labels for (canonical) image refs that match these glob expression")
+		registryDisableScanning = fs.Bool("registry-disable-scanning", false, "do not scan container image registries to fill in the registry cache")
+		automationInterval      = fs.Duration("automation-interval", 5*time.Minute, "period at which to check for image updates for automated workloads")
+		registryPollInterval    = fs.Duration("registry-poll-interval", 5*time.Minute, "period at which to check for updated images")
+		registryRPS             = fs.Float64("registry-rps", 50, "maximum registry requests per second per host")
+		registryBurst           = fs.Int("registry-burst", defaultRemoteConnections, "maximum number of warmer connections to remote and memcache")
+		registryTrace           = fs.Bool("registry-trace", false, "output trace of image registry requests to log")
+		registryInsecure        = fs.StringSlice("registry-insecure-host", []string{}, "let these registry hosts skip TLS host verification and fall back to using HTTP instead of HTTPS; this allows man-in-the-middle attacks, so use with extreme caution")
+		registryExcludeImage    = fs.StringSlice("registry-exclude-image", []string{"k8s.gcr.io/*"}, "do not scan images that match these glob expressions; the default is to exclude the 'k8s.gcr.io/*' images")
+		registryUseLabels       = fs.StringSlice("registry-use-labels", []string{"index.docker.io/weaveworks/*", "index.docker.io/fluxcd/*"}, "use the timestamp (RFC3339) from labels for (canonical) image refs that match these glob expression")
 
 		// AWS authentication
 		registryAWSRegions         = fs.StringSlice("registry-ecr-region", nil, "include just these AWS regions when scanning images in ECR; when not supplied, the cluster's region will included if it can be detected through the AWS API")
@@ -165,7 +169,7 @@ func main() {
 		registryRequire = fs.StringSlice("registry-require", nil, fmt.Sprintf(`exit with an error if auto-authentication with any of the given registries is not possible (possible values: {%s})`, strings.Join(RequireValues, ",")))
 
 		// k8s-secret backed ssh keyring configuration
-		k8sInCluster             = fs.Bool("k8s-in-cluster", true, "set this to true if fluxd is deployed as a container inside Kubernetes")
+		_                        = fs.Bool("k8s-in-cluster", true, "set this to true if fluxd is deployed as a container inside Kubernetes")
 		k8sSecretName            = fs.String("k8s-secret-name", "flux-git-deploy", "name of the k8s secret used to store the private SSH key")
 		k8sSecretVolumeMountPath = fs.String("k8s-secret-volume-mount-path", "/etc/fluxd/ssh", "mount location of the k8s secret storing the private SSH key")
 		k8sSecretDataKey         = fs.String("k8s-secret-data-key", "identity", "data key holding the private SSH key within the k8s secret")
@@ -174,8 +178,8 @@ func main() {
 		k8sNamespaceWhitelist = fs.StringSlice("k8s-namespace-whitelist", []string{}, "restrict the view of the cluster to the namespaces listed. All namespaces are included if this is not set")
 		k8sAllowNamespace     = fs.StringSlice("k8s-allow-namespace", []string{}, "restrict all operations to the provided namespaces")
 		k8sDefaultNamespace   = fs.String("k8s-default-namespace", "", "the namespace to use for resources where a namespace is not specified")
-
-		k8sVerbosity = fs.Int("k8s-verbosity", 0, "klog verbosity level")
+		k8sExcludeResource    = fs.StringSlice("k8s-unsafe-exclude-resource", []string{"*metrics.k8s.io/*", "webhook.certmanager.k8s.io/*", "v1/Event"}, "do not attempt to obtain cluster resources whose group/version/kind matches these glob expressions. Potentially unsafe, please read its documentation first")
+		k8sVerbosity          = fs.Int("k8s-verbosity", 0, "klog verbosity level")
 
 		// SSH key generation
 		sshKeyBits   = optionalVar(fs, &ssh.KeyBitsValue{}, "ssh-keygen-bits", "-b argument to ssh-keygen (default unspecified)")
@@ -197,6 +201,7 @@ func main() {
 	fs.MarkDeprecated("registry-cache-expiry", "no longer used; cache entries are expired adaptively according to how often they change")
 	fs.MarkDeprecated("k8s-namespace-whitelist", "changed to --k8s-allow-namespace, use that instead")
 	fs.MarkDeprecated("registry-poll-interval", "changed to --automation-interval, use that instead")
+	fs.MarkDeprecated("k8s-in-cluster", "no longer used")
 
 	var kubeConfig *string
 	{
@@ -207,6 +212,7 @@ func main() {
 			kubeConfig = fs.String("kube-config", "", "the absolute path of the k8s config file.")
 		}
 	}
+	fs.MarkDeprecated("kube-config", "please use the KUBECONFIG environment variable instead")
 
 	// Explicitly initialize klog to enable stderr logging,
 	// and parse our own flags.
@@ -385,20 +391,19 @@ func main() {
 
 	var restClientConfig *rest.Config
 	{
-		if *k8sInCluster {
-			logger.Log("msg", "using in cluster config to connect to the cluster")
-			restClientConfig, err = rest.InClusterConfig()
-			if err != nil {
-				logger.Log("err", err)
-				os.Exit(1)
-			}
-		} else {
+		var err error
+		if *kubeConfig != "" {
 			logger.Log("msg", fmt.Sprintf("using kube config: %q to connect to the cluster", *kubeConfig))
 			restClientConfig, err = clientcmd.BuildConfigFromFlags("", *kubeConfig)
-			if err != nil {
-				logger.Log("err", err)
-				os.Exit(1)
-			}
+		} else {
+			restClientConfig, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+				clientcmd.NewDefaultClientConfigLoadingRules(),
+				&clientcmd.ConfigOverrides{},
+			).ClientConfig()
+		}
+		if err != nil {
+			logger.Log("err", err)
+			os.Exit(1)
 		}
 		restClientConfig.QPS = 50.0
 		restClientConfig.Burst = 100
@@ -447,8 +452,10 @@ func main() {
 		}
 		clusterVersion = "kubernetes-" + serverVersion.GitVersion
 
-		if *k8sInCluster && !httpGitURL {
-			namespace, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		fileinfo, err := os.Stat(k8sInClusterSecretsBaseDir)
+		isInCluster := err == nil && fileinfo.IsDir()
+		if isInCluster && !httpGitURL {
+			namespace, err := ioutil.ReadFile(filepath.Join(k8sInClusterSecretsBaseDir, "serviceaccount/namespace"))
 			if err != nil {
 				logger.Log("err", err)
 				os.Exit(1)
@@ -493,8 +500,11 @@ func main() {
 
 		client := kubernetes.MakeClusterClientset(clientset, dynamicClientset, fhrClientset, hrClientset, discoClientset)
 		kubectlApplier := kubernetes.NewKubectl(kubectl, restClientConfig)
-		allowedNamespaces := append(*k8sNamespaceWhitelist, *k8sAllowNamespace...)
-		k8sInst := kubernetes.NewCluster(client, kubectlApplier, sshKeyRing, logger, allowedNamespaces, *registryExcludeImage)
+		allowedNamespaces := make(map[string]struct{})
+		for _, n := range append(*k8sNamespaceWhitelist, *k8sAllowNamespace...) {
+			allowedNamespaces[n] = struct{}{}
+		}
+		k8sInst := kubernetes.NewCluster(client, kubectlApplier, sshKeyRing, logger, allowedNamespaces, *registryExcludeImage, *k8sExcludeResource)
 		k8sInst.GC = *syncGC
 		k8sInst.DryGC = *dryGC
 
@@ -548,9 +558,9 @@ func main() {
 	}
 
 	// Registry components
-	var cacheRegistry registry.Registry
+	var imageRegistry registry.Registry = registry.ImageScanDisabledRegistry{}
 	var cacheWarmer *cache.Warmer
-	{
+	if !*registryDisableScanning {
 		// Cache client, for use by registry and cache warmer
 		var cacheClient cache.Client
 		var memcacheClient *registryMemcache.MemcacheClient
@@ -574,13 +584,13 @@ func main() {
 		defer memcacheClient.Stop()
 		cacheClient = cache.InstrumentClient(memcacheClient)
 
-		cacheRegistry = &cache.Cache{
+		imageRegistry = &cache.Cache{
 			Reader: cacheClient,
 			Decorators: []cache.Decorator{
 				cache.TimestampLabelWhitelist(*registryUseLabels),
 			},
 		}
-		cacheRegistry = registry.NewInstrumentedRegistry(cacheRegistry)
+		imageRegistry = registry.NewInstrumentedRegistry(imageRegistry)
 
 		// Remote client, for warmer to refresh entries
 		registryLogger := log.With(logger, "component", "registry")
@@ -649,6 +659,7 @@ func main() {
 		"sync-tag", *gitSyncTag,
 		"state", *syncState,
 		"readonly", *gitReadonly,
+		"registry-disable-scanning", *registryDisableScanning,
 		"notes-ref", *gitNotesRef,
 		"set-author", *gitSetAuthor,
 		"git-secret", *gitSecret,
@@ -700,7 +711,7 @@ func main() {
 		V:                         version,
 		Cluster:                   k8s,
 		Manifests:                 k8sManifests,
-		Registry:                  cacheRegistry,
+		Registry:                  imageRegistry,
 		ImageRefresh:              make(chan image.Name, 100), // size chosen by fair dice roll
 		Repo:                      repo,
 		GitConfig:                 gitConfig,
@@ -716,6 +727,7 @@ func main() {
 			AutomationInterval:  *automationInterval,
 			GitTimeout:          *gitTimeout,
 			GitVerifySignatures: *gitVerifySignatures,
+			ImageScanDisabled:   *registryDisableScanning,
 		},
 	}
 
@@ -751,11 +763,13 @@ func main() {
 	shutdownWg.Add(1)
 	go daemon.Loop(shutdown, shutdownWg, log.With(logger, "component", "sync-loop"))
 
-	cacheWarmer.Notify = daemon.AskForAutomatedWorkloadImageUpdates
-	cacheWarmer.Priority = daemon.ImageRefresh
-	cacheWarmer.Trace = *registryTrace
-	shutdownWg.Add(1)
-	go cacheWarmer.Loop(log.With(logger, "component", "warmer"), shutdown, shutdownWg, imageCreds)
+	if !*registryDisableScanning {
+		cacheWarmer.Notify = daemon.AskForAutomatedWorkloadImageUpdates
+		cacheWarmer.Priority = daemon.ImageRefresh
+		cacheWarmer.Trace = *registryTrace
+		shutdownWg.Add(1)
+		go cacheWarmer.Loop(log.With(logger, "component", "warmer"), shutdown, shutdownWg, imageCreds)
+	}
 
 	go func() {
 		mux := http.DefaultServeMux
